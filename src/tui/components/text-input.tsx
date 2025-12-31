@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useLayoutEffect } from "react";
 import { Text, useInput } from "ink";
 import chalk from "chalk";
 
@@ -59,7 +59,6 @@ export function TextInput({
   // Internal state - this is the source of truth during typing
   const [internalValue, setInternalValue] = useState(externalValue || "");
   const [cursorOffset, setCursorOffset] = useState((externalValue || "").length);
-  const [cursorWidth, setCursorWidth] = useState(0);
 
   // Refs to always have access to latest values in useInput callback
   const valueRef = useRef(internalValue);
@@ -73,39 +72,48 @@ export function TextInput({
   const lastExternalValueRef = useRef(externalValue);
   const lastExternalCursorRef = useRef(externalCursorPosition);
 
-  // Sync with external value when parent explicitly changes it
-  // (e.g., after autocomplete selection or reset)
-  useEffect(() => {
-    if (externalValue !== lastExternalValueRef.current) {
-      lastExternalValueRef.current = externalValue;
-      setInternalValue(externalValue || "");
-      // Also adjust cursor if it's beyond the new value length
-      setCursorOffset((prev) => Math.min(prev, (externalValue || "").length));
-    }
-  }, [externalValue]);
+  // Sync with external value/cursor changes in one pass to avoid stale clamping.
+  useLayoutEffect(() => {
+    const valueChanged = externalValue !== lastExternalValueRef.current;
+    const cursorProvided = externalCursorPosition !== undefined;
+    const cursorChanged =
+      cursorProvided && externalCursorPosition !== lastExternalCursorRef.current;
 
-  // Sync with external cursor position when parent explicitly changes it
-  useEffect(() => {
-    if (
-      externalCursorPosition !== undefined &&
-      externalCursorPosition !== lastExternalCursorRef.current
-    ) {
-      lastExternalCursorRef.current = externalCursorPosition;
-      setCursorOffset(Math.min(externalCursorPosition, valueRef.current.length));
-    }
-  }, [externalCursorPosition]);
+    if (!valueChanged && !cursorChanged) return;
 
-  // Clamp cursor when value changes
-  useEffect(() => {
-    if (!focus || !showCursor) return;
-    setCursorOffset((prev) => Math.min(prev, internalValue.length));
-  }, [internalValue, focus, showCursor]);
+    const nextValue = valueChanged ? externalValue || "" : valueRef.current;
+    let nextCursor = cursorRef.current;
+
+    if (externalCursorPosition !== undefined && (cursorChanged || valueChanged)) {
+      nextCursor = externalCursorPosition;
+    } else if (valueChanged) {
+      nextCursor = Math.min(nextCursor, nextValue.length);
+    }
+
+    if (nextCursor < 0) {
+      nextCursor = 0;
+    } else if (nextCursor > nextValue.length) {
+      nextCursor = nextValue.length;
+    }
+
+    if (valueChanged) {
+      setInternalValue(nextValue);
+      valueRef.current = nextValue;
+    }
+    setCursorOffset(nextCursor);
+    cursorRef.current = nextCursor;
+
+    lastExternalValueRef.current = externalValue;
+    lastExternalCursorRef.current = externalCursorPosition;
+  }, [externalValue, externalCursorPosition]);
 
   // Helper to update value and notify parent
   const updateValue = useCallback(
     (newValue: string, newCursor: number) => {
       setInternalValue(newValue);
       setCursorOffset(newCursor);
+      valueRef.current = newValue;
+      cursorRef.current = newCursor;
       lastExternalValueRef.current = newValue;
       lastExternalCursorRef.current = newCursor;
       onChange(newValue);
@@ -118,13 +126,13 @@ export function TextInput({
   const updateCursor = useCallback(
     (newCursor: number) => {
       setCursorOffset(newCursor);
+      cursorRef.current = newCursor;
       lastExternalCursorRef.current = newCursor;
       onCursorChange?.(newCursor);
     },
     [onCursorChange]
   );
 
-  const cursorActualWidth = cursorWidth;
   const value = internalValue;
   let renderedValue = value;
   let renderedPlaceholder = placeholder ? chalk.grey(placeholder) : undefined;
@@ -141,9 +149,7 @@ export function TextInput({
     let i = 0;
     for (const char of value) {
       renderedValue +=
-        i >= cursorOffset - cursorActualWidth && i <= cursorOffset
-          ? chalk.inverse(char)
-          : char;
+        i === cursorOffset ? chalk.inverse(char) : char;
       i++;
     }
 
@@ -202,8 +208,6 @@ export function TextInput({
 
       let nextCursorOffset = currentCursor;
       let nextValue = currentValue;
-      let nextCursorWidth = 0;
-
       if (key.leftArrow) {
         if (showCursor) {
           // Option+Left: Move to previous word boundary
@@ -268,10 +272,6 @@ export function TextInput({
           input +
           currentValue.slice(currentCursor);
         nextCursorOffset += input.length;
-
-        if (input.length > 1) {
-          nextCursorWidth = input.length;
-        }
       }
 
       // Clamp cursor position
@@ -281,8 +281,6 @@ export function TextInput({
       if (nextCursorOffset > nextValue.length) {
         nextCursorOffset = nextValue.length;
       }
-
-      setCursorWidth(nextCursorWidth);
 
       if (nextValue !== currentValue) {
         updateValue(nextValue, nextCursorOffset);
