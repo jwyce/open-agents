@@ -115,6 +115,15 @@ export const auth = betterAuth({
       clientSecret: process.env.VERCEL_APP_CLIENT_SECRET ?? "",
       scope: ["openid", "email", "profile", "offline_access"],
       overrideUserInfoOnSignIn: true,
+      mapProfileToUser(profile) {
+        return {
+          username:
+            profile.preferred_username ??
+            profile.name ??
+            profile.email?.split("@")[0] ??
+            `vercel-${profile.sub}`,
+        };
+      },
     },
     github: {
       clientId: process.env.NEXT_PUBLIC_GITHUB_CLIENT_ID ?? "",
